@@ -1,15 +1,40 @@
 import type { NavItem } from "@/types";
 
 /**
- * Single source of truth for identity, canonical URL and social links.
- * Set NEXT_PUBLIC_SITE_URL in the deploy environment; the fallback keeps
- * local builds and preview deploys coherent.
+ * Resolves the canonical origin from the environment.
+ *
+ * Every value here is untrusted input, and the failure mode is severe: an
+ * invalid origin makes `new URL()` throw during `generateMetadata`, which fails
+ * the whole build rather than degrading. So each candidate is trimmed, rejected
+ * if empty, given a scheme if it lacks one, and parsed before it is accepted —
+ * an env var set to "" must fall through to the next candidate, not become the
+ * origin. `.origin` also normalises away any path or trailing slash.
  */
-const url =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ??
-  (process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : "http://localhost:3000");
+export function resolveSiteUrl(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const candidates = [
+    env.NEXT_PUBLIC_SITE_URL,
+    env.VERCEL_PROJECT_PRODUCTION_URL,
+    env.VERCEL_URL,
+  ];
+
+  for (const candidate of candidates) {
+    const value = candidate?.trim();
+    if (!value) continue;
+
+    const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+    try {
+      return new URL(withScheme).origin;
+    } catch {
+      // Malformed value: try the next candidate rather than failing the build.
+    }
+  }
+
+  return "http://localhost:3000";
+}
+
+const url = resolveSiteUrl();
 
 export const site = {
   url,

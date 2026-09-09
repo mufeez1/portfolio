@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-09-09
+
+### Fixed
+
+- Production builds no longer fail when `NEXT_PUBLIC_SITE_URL` is set but empty.
+  The previous resolver used `??`, which only falls through on `null` and
+  `undefined`, so an empty string reached `new URL("")` and threw
+  `ERR_INVALID_URL` while collecting page data. `resolveSiteUrl()` now trims
+  each candidate, skips blank ones, adds a scheme to bare hostnames, and parses
+  before accepting — falling back through `NEXT_PUBLIC_SITE_URL`,
+  `VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL` and finally localhost. It is
+  covered by unit tests in `e2e/site-url.spec.ts`, including a case asserting
+  the result is always something `new URL()` accepts.
+
 ## [1.0.0] — 2026-09-09
 
 Initial release.
@@ -50,7 +64,7 @@ Initial release.
 
 **Quality**
 
-- 55 Playwright tests across desktop and mobile projects covering
+- 65 Playwright tests across desktop and mobile projects covering
   accessibility (axe, WCAG 2.2 AA, on five routes plus dark mode and the
   diagram's selected state), SEO surfaces, security headers, the contact
   endpoint, responsive behaviour and the cursor ring.
