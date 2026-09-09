@@ -28,13 +28,34 @@ test.describe("resolveSiteUrl", () => {
       }),
     ).toBe("https://portfolio.vercel.app");
 
-    expect(resolveSiteUrl({ NEXT_PUBLIC_SITE_URL: "   " })).toBe("http://localhost:3000");
+    expect(resolveSiteUrl({ NEXT_PUBLIC_SITE_URL: "   " })).toBe(
+      "http://localhost:3000",
+    );
+  });
+
+  test("prefers the server-only SITE_URL over the public variant", () => {
+    expect(
+      resolveSiteUrl({
+        SITE_URL: "https://muffeez.dev",
+        NEXT_PUBLIC_SITE_URL: "https://old.example.com",
+      }),
+    ).toBe("https://muffeez.dev");
+
+    // Still honoured on its own, so an existing deploy does not break.
+    expect(resolveSiteUrl({ NEXT_PUBLIC_SITE_URL: "https://muffeez.dev" })).toBe(
+      "https://muffeez.dev",
+    );
+
+    // A blank SITE_URL must not shadow a real public one.
+    expect(
+      resolveSiteUrl({ SITE_URL: "", NEXT_PUBLIC_SITE_URL: "https://muffeez.dev" }),
+    ).toBe("https://muffeez.dev");
   });
 
   test("adds a scheme to bare Vercel hostnames", () => {
-    expect(resolveSiteUrl({ VERCEL_PROJECT_PRODUCTION_URL: "portfolio.vercel.app" })).toBe(
-      "https://portfolio.vercel.app",
-    );
+    expect(
+      resolveSiteUrl({ VERCEL_PROJECT_PRODUCTION_URL: "portfolio.vercel.app" }),
+    ).toBe("https://portfolio.vercel.app");
     expect(resolveSiteUrl({ VERCEL_URL: "portfolio-abc123.vercel.app" })).toBe(
       "https://portfolio-abc123.vercel.app",
     );

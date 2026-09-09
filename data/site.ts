@@ -14,6 +14,11 @@ export function resolveSiteUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
   const candidates = [
+    // SITE_URL is preferred: `site.url` is only ever read on the server
+    // (metadata, sitemap, robots, OG image), so there is no reason to inline it
+    // into the browser bundle. NEXT_PUBLIC_SITE_URL still works for anyone who
+    // already set it that way.
+    env.SITE_URL,
     env.NEXT_PUBLIC_SITE_URL,
     env.VERCEL_PROJECT_PRODUCTION_URL,
     env.VERCEL_URL,

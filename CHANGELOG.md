@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-09-09
+
+### Changed
+
+- The canonical origin is now read from `SITE_URL` in preference to
+  `NEXT_PUBLIC_SITE_URL`. `site.url` is only ever read on the server — metadata,
+  sitemap, robots and the OG image — so the value has no reason to be inlined
+  into the browser bundle, and Vercel warns about the public prefix. The
+  `NEXT_PUBLIC_` name is still honoured so existing deploys keep working.
+
 ## [1.0.1] — 2026-09-09
 
 ### Fixed
