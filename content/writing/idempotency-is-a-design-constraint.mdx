@@ -1,0 +1,72 @@
+---
+title: "Idempotency is a design constraint, not a retry policy"
+description: "Exactly-once delivery is a marketing term. Making at-least-once safe is an architectural decision you take once, early, and never get to bolt on later."
+date: "2025-06-19"
+tags: ["kafka", "rabbitmq", "nestjs"]
+---
+
+Every team that adopts a message broker eventually asks the same question: how do we get exactly-once delivery? It is the wrong question, and chasing the answer costs more than accepting the truth — that the network will deliver your message twice, and your job is to make the second delivery harmless.
+
+It is also the question that decides whether Kafka or RabbitMQ is the right tool, which is why it is worth settling early rather than during an incident.
+
+## Why exactly-once is a category error
+
+Exactly-once delivery requires consensus between the producer, the broker and the consumer about whether a message was processed. That consensus needs a transaction spanning all three. Kafka's transactional producer gets you exactly-once *within Kafka*, which is genuinely useful and frequently mistaken for a guarantee that extends to your database. It does not. The moment your consumer writes to Postgres, you are back to two systems with no shared transaction.
+
+So the guarantee you can actually build is: **at-least-once delivery, with idempotent processing**. That combination is indistinguishable from exactly-once at the boundary a user can observe, and it is achievable with tools you already have.
+
+## The shape of an idempotent consumer
+
+An idempotent consumer needs a key that is stable across redeliveries and unique across distinct events. Two properties, and most bugs come from getting the second one wrong.
+
+```sql
+-- The upsert is the whole pattern. The unique index is what enforces it.
+create unique index events_dedupe_idx
+  on event_rollups (tenant_id, event_key);
+
+insert into event_rollups (tenant_id, event_key, count, updated_at)
+values ($1, $2, 1, now())
+on conflict (tenant_id, event_key)
+do update set count = event_rollups.count + excluded.count,
+              updated_at = now();
+```
+
+A tempting shortcut is to derive the key from the broker's message offset. Do not: an offset identifies a position in a partition, not an event. Rewind the topic, re-partition, or replay from a backup and the same event arrives under a new offset — and your idempotency evaporates precisely when you need it most.
+
+Derive the key from the event's own content: the source system's identifier if it has one, or a hash of the immutable fields if it does not.
+
+## Dual writes are the bug you keep re-introducing
+
+The other half of the problem is on the producer side. If a request handler writes to the database and then publishes to Kafka, there is a window where the commit succeeds and the publish fails. Reverse the order and you get the opposite failure: a published event for a transaction that rolled back.
+
+The outbox pattern removes the window by removing the second system from the request path entirely:
+
+```sql
+begin;
+  insert into orders (...) values (...);
+  insert into outbox (aggregate_id, type, payload)
+    values ($1, 'order.created', $2);
+commit;
+```
+
+A separate relay reads the outbox and publishes to Kafka. If the relay crashes mid-publish, it republishes on restart — at-least-once, which your idempotent consumer already tolerates. You have traded a correctness problem for a latency problem, and latency problems are the kind you can solve with a bigger machine.
+
+## What this buys you beyond correctness
+
+The reason I treat this as a design constraint rather than an implementation detail is what becomes possible once it holds:
+
+- **Replay is routine.** Reprocessing a week of events produces the same state as processing it once, so backfills stop being an engineering project.
+- **Cutovers are reversible.** You can run the old and new consumer side by side against the same topic and compare outputs.
+- **Incidents get shorter.** "Just replay the topic from yesterday" is a five-minute fix instead of a data-reconciliation exercise.
+
+None of that is available to a system that merely tries hard not to duplicate. It is available to one that assumes duplication and is built so it does not matter.
+
+## Which broker, then
+
+Once idempotency is a property of the consumer rather than a hope, the choice between brokers stops being contentious and becomes a question of what the workload needs.
+
+Kafka is a durable, replayable log. Reach for it when the events have value after the fact — analytics, audit, anything you may want to reprocess against new logic. Retention is the feature.
+
+RabbitMQ is a work queue with per-message acknowledgement and dead-lettering. Reach for it when a single unit of work must happen and must not be lost — sending the invoice, processing the order, generating the export. A message that fails five times belongs in a dead-letter queue where somebody can look at it, not replayed forever from an offset.
+
+Most systems want both, and using each for what it is actually good at removes an argument teams otherwise have every quarter.

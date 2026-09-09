@@ -1,0 +1,84 @@
+---
+title: "Multi-tenancy belongs in the schema"
+description: "Tenant isolation enforced in a service guard survives until the first batch job that forgets it. Enforced by the database, it survives every engineer who comes after you."
+date: "2025-11-04"
+tags: ["postgres", "multi-tenancy", "architecture"]
+---
+
+There is a particular incident that repeats in every multi-tenant product. A rule is written down — an organisation only ever sees its own data — and it is enforced by a check in the application. Months later a reporting endpoint, a migration script or a background job writes to the same table without that check, and one customer sees another customer's records.
+
+The fix is almost never "add the check to the new code path". It is to move the rule somewhere it cannot be bypassed.
+
+## The service-layer version is a promise, not a guarantee
+
+The common implementation puts tenancy in a guard or an interceptor:
+
+```ts
+// Every query is correct — as long as every query goes through here.
+@Injectable()
+export class TenantScopeInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler) {
+    const request = context.switchToHttp().getRequest();
+    RequestContext.set("tenantId", request.user.tenantId);
+    return next.handle();
+  }
+}
+```
+
+This is fine code. The problem is the qualifier: *as long as every query goes through here*. An HTTP request does. A cron job does not. A one-off script a support engineer runs at 2am definitely does not, and that is the one that ends up in the incident review.
+
+## Push the invariant into the database
+
+Postgres can enforce the rule itself, and then no code path can violate it:
+
+```sql
+alter table enrollments enable row level security;
+
+create policy tenant_isolation on enrollments
+  using (tenant_id = current_setting('app.tenant_id')::uuid);
+```
+
+The application now sets one session variable at the connection boundary:
+
+```ts
+// Set once per request, at the edge. Everything downstream inherits it.
+await queryRunner.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
+```
+
+Two things changed. A query that forgets tenancy now returns zero rows instead of everyone's rows — the failure is loud and safe rather than silent and expensive. And the guarantee holds for code that does not exist yet, which is the only kind of guarantee worth having.
+
+## The same move, one layer up
+
+Constraints are the general form of this idea: enforce an invariant at the lowest layer that can express it.
+
+```sql
+-- Two concurrent requests can both read "no clash" and both insert.
+-- An exclusion constraint makes the race unrepresentable.
+create extension if not exists btree_gist;
+
+alter table sessions
+  add constraint sessions_no_overlap
+  exclude using gist (
+    room_id with =,
+    tstzrange(starts_at, ends_at) with &&
+  );
+```
+
+The application still catches the violation and turns it into a friendly error — but it is now *handling a reported failure* rather than being the thing that prevents it. The read-then-write race is gone because the database serialises the check.
+
+Types are the compile-time version of the same move. A function that accepts a `string` for a tenant id will eventually be handed the wrong one:
+
+```ts
+// Parse once at the boundary; the type is then proof, not a hope.
+type TenantId = string & { readonly __brand: "TenantId" };
+```
+
+## When not to do this
+
+Constraints are rigid, and rigidity has a cost. Three cases where I deliberately leave the rule in application code:
+
+- **The rule is genuinely soft.** Business rules with exceptions — "one active subscription, unless sales approved a second" — do not belong in a unique index. You will be dropping it under pressure at the worst possible moment.
+- **The rule spans aggregates.** A constraint that must consult three tables is a distributed transaction in disguise. Model it as a process with compensation instead.
+- **You do not yet know the rule.** Encoding a guess is expensive to undo. Log the violations first, learn the real shape, then enforce it.
+
+The heuristic underneath all of it: prefer the version where the failure is impossible over the version where the failure is caught. Catching is a promise about the code that exists today. Impossibility survives the next six engineers.

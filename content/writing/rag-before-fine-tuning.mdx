@@ -1,0 +1,52 @@
+---
+title: "Retrieval first, fine-tuning last"
+description: "Fine-tuning teaches a model how to sound, not what is true. Most teams reach for it early and spend months learning that their real problem was retrieval quality."
+date: "2026-02-10"
+tags: ["rag", "llm", "ai agents"]
+---
+
+Every team that ships an assistant hits the same wall around week three. The demo was convincing, the pilot is not, and the reports all say the same thing: it makes things up. The instinct at that point is to fine-tune — to teach the model the business. It is almost always the wrong first move.
+
+## What fine-tuning actually changes
+
+Fine-tuning adjusts weights. It is very good at teaching a model *how to behave*: the tone your organisation uses, a strict output format, a domain's phrasing conventions, refusing a category of request. Those are style problems, and they are exactly what it should be spent on.
+
+It is a poor mechanism for facts, for one structural reason: a fact baked into weights cannot be corrected without retraining. Your pricing page changes on Tuesday and the model is confidently wrong until the next training run. You have taken something that should be a content edit and turned it into an ML deployment.
+
+Facts belong in a retrieval index, where fixing an answer means fixing a document.
+
+## Most "hallucination" reports are retrieval failures
+
+This is the part that surprises people. When you trace a bad answer back, the usual finding is not that the model invented something from nothing — it is that the passages handed to the model did not contain the answer, and it did what it was asked to do with what it had.
+
+That reframes the debugging problem entirely. Measure the two stages separately:
+
+- **Retrieval:** given a question, did the correct passage make it into the context at all? This is a search problem with search metrics — recall@k, mean reciprocal rank.
+- **Generation:** given passages that *do* contain the answer, did the model answer faithfully from them?
+
+Teams that only measure end-to-end quality spend their time rewriting prompts, because that is the only knob they can see. Teams that measure retrieval separately usually find their accuracy problem lives there, and that it is fixable with ordinary engineering.
+
+## The retrieval knobs that actually move the number
+
+In rough order of how much they have mattered in practice:
+
+1. **Chunk boundaries.** Splitting on a fixed token count cuts tables in half and separates a heading from the paragraph it governs. Splitting on document structure — sections, list items, rows — is unglamorous and buys more accuracy than any prompt change.
+2. **Re-ranking.** Vector similarity is a coarse first pass. Retrieving 30 candidates and re-ranking them down to 5 with a cross-encoder consistently outperformed retrieving 5 directly.
+3. **Hybrid search.** Embeddings are weak on exact identifiers — an order number, an error code, a product SKU. Combining dense retrieval with keyword search covers the case where a user pastes the exact string they are asking about.
+4. **Metadata filtering.** In a multi-tenant system this is not an optimisation, it is a correctness requirement. Retrieval scoped to the tenant by construction means an organisation cannot receive an answer grounded in another organisation's documents.
+
+## Make the answer auditable
+
+An assistant that cites what it retrieved is a different product from one that does not. Not because users read the citations — mostly they do not — but because the moment someone disputes an answer you can settle it in seconds instead of shrugging at a black box.
+
+It also changes the failure mode you ship. A system that says "I could not find anything about that" when retrieval comes back empty is trustworthy in a way that a system which improvises is not, and that behaviour is a threshold on retrieval scores plus an instruction, not a model capability you have to buy.
+
+## Where fine-tuning earns its place
+
+Once retrieval is good, fine-tuning becomes worth the cost, for narrow reasons:
+
+- Enforcing a house tone across thousands of responses without spending a third of every prompt describing it.
+- Locking a structured output format more reliably than instructions alone manage.
+- Compressing a long, stable system prompt into the weights, which cuts per-request latency and cost.
+
+That is a real list, and none of it is "teaching the model the business". Retrieve what changes; fine-tune what does not.
